@@ -80,8 +80,20 @@ def _video_issues(v):
     return issues
 
 
-def evaluate(probe, ext, target="plex"):
-    """Return a list of (severity, message) for one ffprobe JSON result."""
+def _default_audio(audio):
+    """The track a player starts with: the one flagged default, else the first."""
+    for a in audio:
+        if (a.get("disposition") or {}).get("default"):
+            return a
+    return audio[0] if audio else None
+
+
+def evaluate(probe, ext, target="plex", audio_lang=None):
+    """Return a list of (severity, message) for one ffprobe JSON result.
+
+    audio_lang: optional set of ISO 639-2 codes (e.g. {"eng"}); WARN when the default audio
+    track is tagged with another language. Untagged ("und") tracks are not flagged.
+    """
     video, audio = _streams(probe, "video"), _streams(probe, "audio")
     subs = _streams(probe, "subtitle")
     if not video:
@@ -123,6 +135,13 @@ def evaluate(probe, ext, target="plex"):
             elif not names & ok_audio:
                 issues.append((WARN, "no %s audio track (%s); plays silent"
                                % ("/".join(sorted(ok_audio)), ", ".join(sorted(n for n in names if n)))))
+    if audio_lang and audio:
+        first = _default_audio(audio)
+        lang = ((first.get("tags") or {}).get("language") or "und").lower()
+        if lang not in audio_lang and lang != "und":
+            others = sorted({((a.get("tags") or {}).get("language") or "und").lower() for a in audio})
+            issues.append((WARN, "default audio track is '%s', not %s (tracks: %s)"
+                           % (lang, "/".join(sorted(audio_lang)), ", ".join(others))))
     # de-duplicate while keeping order
     seen, out = set(), []
     for i in issues:
@@ -164,16 +183,17 @@ def walk(root):
                 yield os.path.join(dirpath, f)
 
 
-def check_file(path, cmd, timeout, cache, target="plex"):
+def check_file(path, cmd, timeout, cache, target="plex", audio_lang=None):
     st = os.stat(path)
-    key = "%s|%s|%d|%d" % (target, path, st.st_size, int(st.st_mtime))
+    key = "%s|%s|%s|%d|%d" % (target, ",".join(sorted(audio_lang or [])), path, st.st_size,
+                              int(st.st_mtime))
     if key in cache:
         return cache[key], key
     probe, err = run_probe(cmd, path, timeout)
     if err:
         res = {"path": path, "severity": FAIL, "issues": ["unreadable: " + err], "info": ""}
     else:
-        issues = evaluate(probe, os.path.splitext(path)[1].lower(), target)
+        issues = evaluate(probe, os.path.splitext(path)[1].lower(), target, audio_lang)
         sev = min((s for s, _ in issues), key=lambda x: ORDER[x], default=OK)
         res = {"path": path, "severity": sev, "issues": [m for _, m in issues],
                "info": summarize(probe)}
@@ -186,6 +206,9 @@ def main(argv=None):
     p.add_argument("--target", choices=TARGETS, default="plex",
                    help="playback path: plex (Plex for PS5 app, default) or media-gallery (USB)")
     p.add_argument("--strict", action="store_true", help="treat WARN as FAIL for the exit code")
+    p.add_argument("--audio-lang", metavar="CODES",
+                   help="comma-separated ISO 639-2 codes (e.g. eng); WARN when the default audio "
+                        "track is another language")
     p.add_argument("--ffprobe", default="ffprobe",
                    help="ffprobe command; may be a wrapper script or quoted command (default: ffprobe)")
     p.add_argument("--jobs", type=int, default=2, help="parallel probes (default 2)")
@@ -198,6 +221,7 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     cmd = shlex.split(args.ffprobe)
+    audio_lang = {c.strip().lower() for c in args.audio_lang.split(",")} if args.audio_lang else None
     cache = {}
     if args.cache and os.path.exists(args.cache):
         with open(args.cache) as fh:
@@ -205,7 +229,7 @@ def main(argv=None):
     paths = sorted(walk(args.root))
     results, new_cache = [], {}
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
-        for i, (res, key) in enumerate(ex.map(lambda x: check_file(x, cmd, args.timeout, cache, args.target), paths), 1):
+        for i, (res, key) in enumerate(ex.map(lambda x: check_file(x, cmd, args.timeout, cache, args.target, audio_lang), paths), 1):
             results.append(res)
             new_cache[key] = res
             if sys.stderr.isatty():

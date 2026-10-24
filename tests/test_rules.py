@@ -120,3 +120,29 @@ def test_gallery_non_aac_audio_warns():
 
 def test_gallery_rejects_avi():
     assert FAIL in sev([H264, AAC], ".avi", "media-gallery")
+
+
+# --- default audio language ----------------------------------------------------
+
+def _aud(lang, default=0):
+    return {"codec_type": "audio", "codec_name": "ac3", "tags": {"language": lang},
+            "disposition": {"default": default}}
+
+
+def test_audio_lang_default_hindi_warns():
+    issues = evaluate({"streams": [H264, _aud("hin", 1), _aud("eng")]}, ".mkv", "plex", {"eng"})
+    assert any("default audio track is 'hin'" in m for _, m in issues)
+
+
+def test_audio_lang_first_track_used_when_no_default_flag():
+    assert sev2([H264, _aud("hin"), _aud("eng")]) == {WARN}
+    assert sev2([H264, _aud("eng"), _aud("hin")]) == set()
+
+
+def test_audio_lang_untagged_and_off_by_default():
+    assert sev2([H264, _aud("und")]) == set()
+    assert sev([H264, _aud("hin", 1)]) == set()
+
+
+def sev2(streams):
+    return {s for s, _ in evaluate({"streams": streams}, ".mkv", "plex", {"eng"})}

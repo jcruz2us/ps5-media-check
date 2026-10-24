@@ -1,7 +1,7 @@
 # Recyclarr config: a PS5-Friendly quality profile for Radarr and Sonarr.
 # Target: Plex for PlayStation 5. The app direct-streams H.264 (8-bit) and HEVC Main/Main 10
 # (HDR10, Dolby Vision with an HDR10 fallback); Plex transcodes audio it can't pass through.
-# Anything scored -10000 is rejected (min_format_score 0). Upgrades are off, so applying
+# Anything scored -10000 is rejected (min_format_score -100). Upgrades are off, so applying
 # the profile to an existing library never re-downloads it.
 # Secrets (base_url, api_key) live in secrets.yml next to this file.
 
@@ -18,7 +18,7 @@ radarr:
         upgrade:
           allowed: false
           until_quality: Bluray-2160p  # required by the API even with upgrades off
-        min_format_score: 0
+        min_format_score: -100  # rejects -10000 formats; mild audio penalties only break ties
         quality_sort: top
         qualities:
         - name: Bluray-2160p
@@ -41,6 +41,16 @@ radarr:
           - ff86c4326018682f817830ced463332b  # MPEG2
           - 79472802acd400badf722871805171f8  # PS5 - x264 10bit (Hi10P) (local)
           - c6bb7165b6c415e7bc6e32139ddad189  # PS5 - XviD/DivX (local)
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10000
+      # English must be the first audio track: Plex for PS5 plays the default track. Release titles
+      # can't show track order, so reject the release types that usually put another language first.
+      - trash_ids:
+          - 0dc8aec3bd1c47cd6c40c46ecd27e846  # Language: Not English
+          - b6832f586342ef70d9c128d40c07b872  # Bad Dual Groups
+          - 4b900e171accbfb172729b63323ea8ca  # MULTi
+          - 12720de67b0e54dc59738ff1db2eefa6  # PS5 - Dual Audio (local)
         assign_scores_to:
           - name: PS5-Friendly
             score: -10000
@@ -101,7 +111,7 @@ sonarr:
         upgrade:
           allowed: false
           until_quality: Bluray-2160p  # required by the API even with upgrades off
-        min_format_score: 0
+        min_format_score: -100  # rejects -10000 formats; mild audio penalties only break ties
         quality_sort: top
         qualities:
         - name: Bluray-2160p
@@ -126,6 +136,16 @@ sonarr:
           - 4aee45b0868229c4fbd8bad3e315f1d0  # MPEG2
           - 79472802acd400badf722871805171f8  # PS5 - x264 10bit (Hi10P) (local)
           - c6bb7165b6c415e7bc6e32139ddad189  # PS5 - XviD/DivX (local)
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10000
+      # English must be the first audio track: Plex for PS5 plays the default track. Release titles
+      # can't show track order, so reject the release types that usually put another language first.
+      - trash_ids:
+          - 69aa1e159f97d860440b04cd6d590c4f  # Language: Not English
+          - 32b367365729d530ca1c124a0b180c64  # Bad Dual Groups
+          - 7ba05c6e0e14e793538174c679126996  # MULTi
+          - 12720de67b0e54dc59738ff1db2eefa6  # PS5 - Dual Audio (local)
         assign_scores_to:
           - name: PS5-Friendly
             score: -10000

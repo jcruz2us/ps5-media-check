@@ -56,7 +56,8 @@ hold the limits. Dolby Vision detection needs ffprobe 4.4 or newer.
 
 ## Options
 
-`--target {plex,media-gallery}` · `--strict` (WARN counts as failure) · `--ffprobe CMD` ·
+`--target {plex,media-gallery}` · `--strict` (WARN counts as failure) ·
+`--audio-lang eng` (WARN when the default audio track is another language) · `--ffprobe CMD` ·
 `--jobs N` · `--timeout S` · `--cache FILE` (skip unchanged files) ·
 `--min-severity {WARN,FAIL}` · `--format {text,csv,json}` · `--all`
 
@@ -80,7 +81,7 @@ schedule, so manual edits in the UI are overwritten.
 
 | Score | Custom formats |
 | --- | --- |
-| -10000 (rejected) | DV (w/o HDR fallback), AV1, VP9, VC-1, MPEG2, x264 10bit (Hi10P)\*, XviD/DivX\*, BR-DISK, 3D, Extras, LQ, LQ (Release Title), Upscaled |
+| -10000 (rejected) | Language: Not English, MULTi, Bad Dual Groups, Dual Audio\*, DV (w/o HDR fallback), AV1, VP9, VC-1, MPEG2, x264 10bit (Hi10P)\*, XviD/DivX\*, BR-DISK, 3D, Extras, LQ, LQ (Release Title), Upscaled |
 | +30 | DD+, DD+ ATMOS |
 | +20 | DD, AAC |
 | -20 | TrueHD, TrueHD ATMOS, DTS-HD MA, DTS X |
@@ -92,6 +93,10 @@ schedule, so manual edits in the UI are overwritten.
   BR-DISK are excluded.
 - **Upgrades are off,** so assigning the profile to an existing library does not trigger
   re-downloads.
+- **English first.** Plex plays the file's default audio track, and multi-language releases
+  often put another language first. Release titles can't show track order, so MULTi and dual-audio
+  releases are rejected; scan with `--audio-lang eng` to catch the rest.
+- **min_format_score is -100:** -10000 formats are rejected, small audio penalties are not.
 - **Audio scores only break ties.** Lossless tracks play fine through Plex; the lighter
   tracks are preferred because they avoid a transcode.
 

@@ -1,0 +1,16 @@
+{
+  "trash_id": "12720de67b0e54dc59738ff1db2eefa6",
+  "name": "PS5 - Dual Audio",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "Dual audio / language pair",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": false,
+      "required": false,
+      "fields": {
+        "value": "\\bdual(?![ ._-]?(layer|sub|disc|disk))\\b|\\[(en|eng)\\s*\\+\\s*[a-z]{2,3}\\]|\\[[a-z]{2,3}\\s*\\+\\s*(en|eng)\\]"
+      }
+    }
+  ]
+}
