@@ -27,18 +27,18 @@ Dolby Vision detection needs ffprobe 4.4 or newer.
 `--ffprobe CMD` ffprobe command or wrapper (default `ffprobe`) · `--jobs N` · `--timeout S` ·
 `--cache FILE` skip unchanged files on reruns · `--min-severity {WARN,FAIL}` · `--format {text,csv,json}` · `--all`
 
-## No ffprobe on the host (e.g. Synology)
+## No ffprobe on the host
 
-DSM ships ffmpeg without ffprobe. Drop a static build next to the script and point at it:
+If your system has ffmpeg but no ffprobe, drop a static build next to the script and point at it:
 
 ```
 curl -LO https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
 tar -xJf ffmpeg-release-amd64-static.tar.xz --strip-components=1 --wildcards '*/ffprobe'
-python3 ps5_media_check.py /volume1/video/Movies --ffprobe ./ffprobe
+python3 ps5_media_check.py /path/to/Movies --ffprobe ./ffprobe
 ```
 
 `examples/ffprobe-docker.sh` wraps a Docker image instead, but container start-up cost
-~24 s per file on a Celeron NAS, so prefer the static binary.
+~24 s per file on a low-power CPU, so prefer the static binary.
 
 ## Tests
 
