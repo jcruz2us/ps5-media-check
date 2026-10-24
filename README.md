@@ -13,10 +13,23 @@ Exit code is 1 if any file is FAIL.
 
 ## What it flags
 
-| Severity | Condition |
-| --- | --- |
-| FAIL | H.264 10-bit (Hi10P) or 4:2:2/4:4:4; HEVC outside Main/Main 10; Dolby Vision profile 5 (no fallback); unreadable file; unknown codec |
-| WARN | Dolby Vision 7/8 without HDR10/SDR fallback id; H.264 above level 4.2; HEVC above 5.1; AV1/VP9; DTS/TrueHD-only audio; AVI and other poorly supported containers |
+| Area | Condition | Severity | Likely symptom |
+| --- | --- | --- | --- |
+| Video | H.264 10-bit (Hi10P) | FAIL | pink/green screen, crash |
+| Video | H.264 4:2:2 / 4:4:4 chroma | FAIL | no picture |
+| Video | HEVC profile other than Main / Main 10, or 4:2:2 / 4:4:4 / 12-bit | FAIL | no picture |
+| Video | Dolby Vision profile 5, or no HDR10/SDR fallback | FAIL | pink/purple picture |
+| Video | Dolby Vision 7/8 with other fallback ids | WARN | wrong colors on some files |
+| Video | H.264 above level 4.2, HEVC above level 5.1 | WARN | stutter, refusal to play |
+| Video | AV1, VP9 | WARN | unsupported decode |
+| Video | Resolution above 4096x2304 | WARN | refusal to play |
+| Video | Unknown codec, or no video stream | FAIL | cannot play |
+| Audio | Only DTS / TrueHD / unsupported tracks | WARN | silent playback |
+| Audio | No audio stream | WARN | silent playback |
+| Container | Anything besides MKV, MP4, M4V, MOV, TS, M2TS (e.g. AVI) | WARN | poor seek/metadata support |
+| File | ffprobe cannot read it | FAIL | corrupt or truncated |
+
+Dolby Vision profile 8 with an HDR10 or SDR fallback is not flagged; it plays as the base layer.
 
 These rules are heuristics from community reports and Sony's published format list, not a
 guarantee. Edit the constants at the top of `ps5_media_check.py` to tune them.
