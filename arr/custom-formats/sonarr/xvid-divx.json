@@ -1,0 +1,16 @@
+{
+  "trash_id": "c6bb7165b6c415e7bc6e32139ddad189",
+  "name": "PS5 - XviD/DivX",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "XviD/DivX",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": "\\b(xvid|divx)\\b"
+      }
+    }
+  ]
+}

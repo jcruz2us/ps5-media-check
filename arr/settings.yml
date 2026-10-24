@@ -1,0 +1,10 @@
+# Recyclarr settings: register this repo's extra custom formats alongside the TRaSH Guides.
+resource_providers:
+  - name: ps5-radarr
+    type: custom-formats
+    path: /config/custom-formats/radarr
+    service: radarr
+  - name: ps5-sonarr
+    type: custom-formats
+    path: /config/custom-formats/sonarr
+    service: sonarr

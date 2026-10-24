@@ -1,0 +1,173 @@
+# Recyclarr config: a PS5-Friendly quality profile for Radarr and Sonarr.
+# Target: Plex for PlayStation 5. The app direct-streams H.264 (8-bit) and HEVC Main/Main 10
+# (HDR10, Dolby Vision with an HDR10 fallback); Plex transcodes audio it can't pass through.
+# Anything scored -10000 is rejected (min_format_score 0). Upgrades are off, so applying
+# the profile to an existing library never re-downloads it.
+# Secrets (base_url, api_key) live in secrets.yml next to this file.
+
+radarr:
+  radarr-ps5:
+    base_url: !secret radarr_url
+    api_key: !secret radarr_api_key
+    delete_old_custom_formats: true
+
+    quality_profiles:
+      - name: PS5-Friendly
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: false
+          until_quality: Bluray-2160p  # required by the API even with upgrades off
+        min_format_score: 0
+        quality_sort: top
+        qualities:
+        - name: Bluray-2160p
+        - name: WEB 2160p
+          qualities: [WEBDL-2160p, WEBRip-2160p]
+        - name: Bluray-1080p
+        - name: WEB 1080p
+          qualities: [WEBDL-1080p, WEBRip-1080p]
+        - name: Bluray-720p
+        - name: WEB 720p
+          qualities: [WEBDL-720p, WEBRip-720p]
+
+    custom_formats:
+      # PS5 cannot play the video (pink screen / crash), or the server must transcode it
+      - trash_ids:
+          - 923b6abef9b17f937fab56cfcf89e1f1  # DV (w/o HDR fallback)
+          - cae4ca30163749b891686f95532519bd  # AV1
+          - ae4cfaa9283a4f2150ac3da08e388723  # VP9
+          - 11cd1db7165d6a7ad9a83bc97b8b1060  # VC-1
+          - ff86c4326018682f817830ced463332b  # MPEG2
+          - 79472802acd400badf722871805171f8  # PS5 - x264 10bit (Hi10P) (local)
+          - c6bb7165b6c415e7bc6e32139ddad189  # PS5 - XviD/DivX (local)
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10000
+      # Not a playable movie file
+      - trash_ids:
+          - ed38b889b31be83fda192888e2286d83  # BR-DISK
+          - b8cd450cbfa689c0259a01d9e29ba3d6  # 3D
+          - 0a3f082873eb454bde444150b70253cc  # Extras
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10000
+      # Low quality (TRaSH defaults)
+      - trash_ids:
+          - 90a6f9a284dff5103f6346090e6280c8  # LQ
+          - e204b80c87be9497a8a6eaff48f72905  # LQ (Release Title)
+          - bfd8eb01832d646a0a89c4deb46f8564  # Upscaled
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10000
+      # Audio the PS5 app plays without a server transcode
+      - trash_ids:
+          - 185f1dd7264c4562b9022d963ac37424  # DD+
+          - 1af239278386be2919e1bcee0bde047e  # DD+ ATMOS
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: 30
+      - trash_ids:
+          - c2998bd0d90ed5621d8df281e839436e  # DD
+          - 240770601cc226190c367ef59aba7463  # AAC
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: 20
+      # Lossless audio: Plex transcodes it to AAC; prefer lighter tracks
+      - trash_ids:
+          - 3cafb66171b47f226146a0770576870f  # TrueHD
+          - 496f355514737f7d83bf7aa4d24f8169  # TrueHD ATMOS
+          - dcf3ec6938fa32445f590a4da84256cd  # DTS-HD MA
+          - 2f22d89048b01681dde8afe203bf2e95  # DTS X
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -20
+      - trash_ids:
+          - 1c1a4c5e823891c75bc50380a6866f73  # DTS
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10
+
+sonarr:
+  sonarr-ps5:
+    base_url: !secret sonarr_url
+    api_key: !secret sonarr_api_key
+    delete_old_custom_formats: true
+
+    quality_profiles:
+      - name: PS5-Friendly
+        reset_unmatched_scores:
+          enabled: true
+        upgrade:
+          allowed: false
+          until_quality: Bluray-2160p  # required by the API even with upgrades off
+        min_format_score: 0
+        quality_sort: top
+        qualities:
+        - name: Bluray-2160p
+        - name: WEB 2160p
+          qualities: [WEBDL-2160p, WEBRip-2160p]
+        - name: Bluray-1080p
+        - name: WEB 1080p
+          qualities: [WEBDL-1080p, WEBRip-1080p]
+        - name: HDTV-1080p
+        - name: Bluray-720p
+        - name: WEB 720p
+          qualities: [WEBDL-720p, WEBRip-720p]
+        - name: HDTV-720p
+
+    custom_formats:
+      # PS5 cannot play the video (pink screen / crash), or the server must transcode it
+      - trash_ids:
+          - 9b27ab6498ec0f31a3353992e19434ca  # DV (w/o HDR fallback)
+          - 15a05bc7c1a36e2b57fd628f8977e2fc  # AV1
+          - 90501962793d580d011511155c97e4e5  # VP9
+          - 7470a681e6205243983c4410ee4c920f  # VC-1
+          - 4aee45b0868229c4fbd8bad3e315f1d0  # MPEG2
+          - 79472802acd400badf722871805171f8  # PS5 - x264 10bit (Hi10P) (local)
+          - c6bb7165b6c415e7bc6e32139ddad189  # PS5 - XviD/DivX (local)
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10000
+      # Not a playable movie file
+      - trash_ids:
+          - 85c61753df5da1fb2aab6f2a47426b09  # BR-DISK
+          - fbcb31d8dabd2a319072b84fc0b7249c  # Extras
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10000
+      # Low quality (TRaSH defaults)
+      - trash_ids:
+          - 9c11cd3f07101cdba90a2d81cf0e56b4  # LQ
+          - e2315f990da2e2cbfc9fa5b7a6fcfe48  # LQ (Release Title)
+          - 23297a736ca77c0fc8e70f8edd7ee56c  # Upscaled
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10000
+      # Audio the PS5 app plays without a server transcode
+      - trash_ids:
+          - 63487786a8b01b7f20dd2bc90dd4a477  # DD+
+          - 4232a509ce60c4e208d13825b7c06264  # DD+ ATMOS
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: 30
+      - trash_ids:
+          - dbe00161b08a25ac6154c55f95e6318d  # DD
+          - a50b8a0c62274a7c38b09a9619ba9d86  # AAC
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: 20
+      # Lossless audio: Plex transcodes it to AAC; prefer lighter tracks
+      - trash_ids:
+          - 1808e4b9cee74e064dfae3f1db99dbfe  # TrueHD
+          - 0d7824bb924701997f874e7ff7d4844a  # TrueHD ATMOS
+          - c429417a57ea8c41d57e6990a8b0033f  # DTS-HD MA
+          - 9d00418ba386a083fbf4d58235fc37ef  # DTS X
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -20
+      - trash_ids:
+          - 5964f2a8b3be407d083498e4459d05d0  # DTS
+        assign_scores_to:
+          - name: PS5-Friendly
+            score: -10

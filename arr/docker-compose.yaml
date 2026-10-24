@@ -1,0 +1,13 @@
+# Recyclarr in cron mode: re-applies the PS5-Friendly profile daily.
+# Put recyclarr.yml, settings.yml, secrets.yml and custom-formats/ in ./config.
+services:
+  recyclarr:
+    image: ghcr.io/recyclarr/recyclarr:8
+    container_name: recyclarr
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      - TZ=${TZ:-UTC}
+      - CRON_SCHEDULE=${CRON_SCHEDULE:-@daily}
+    volumes:
+      - ./config:/config

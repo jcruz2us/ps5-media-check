@@ -1,0 +1,34 @@
+{
+  "trash_id": "79472802acd400badf722871805171f8",
+  "name": "PS5 - x264 10bit (Hi10P)",
+  "includeCustomFormatWhenRenaming": false,
+  "specifications": [
+    {
+      "name": "x264/AVC",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": "[xh][ ._-]?264|\\bAVC(\\b|\\d)"
+      }
+    },
+    {
+      "name": "10bit",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": false,
+      "required": true,
+      "fields": {
+        "value": "10[.-]?bit|hi10p?"
+      }
+    },
+    {
+      "name": "Not x265/HEVC",
+      "implementation": "ReleaseTitleSpecification",
+      "negate": true,
+      "required": true,
+      "fields": {
+        "value": "[xh][ ._-]?265|\\bHEVC(\\b|\\d)"
+      }
+    }
+  ]
+}

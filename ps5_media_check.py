@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""ps5-media-check: scan a media library for files the PS5 Media Player may choke on.
+"""ps5-media-check: scan a media library for files a PlayStation 5 will not play cleanly.
 
-Runs ffprobe on every video file and applies a small, editable rule set.
-Stdlib only, Python 3.8+. Findings are heuristics, not Sony's official verdict:
-FAIL = likely broken (pink/green screen, crash, no picture),
-WARN = may be silent, stutter, or be rejected.
+Runs ffprobe on every video file and applies the rules for one playback target:
+  plex           Plex for PlayStation 5 app (default). The app direct-streams the video
+                 (remuxed into DASH/MP4) and lets the server transcode audio, so the video
+                 codec is what matters.
+  media-gallery  The PS5 Media Gallery (USB / built-in player), per Sony's published list.
+Stdlib only, Python 3.8+.
+FAIL = will not play or plays broken (pink/green picture, crash, no picture).
+WARN = plays only if the server transcodes the video, or needs a manual check.
 """
 import argparse
 import csv
@@ -16,85 +20,116 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".m2ts", ".wmv", ".mpg", ".mpeg", ".webm"}
-GOOD_CONTAINERS = {".mkv", ".mp4", ".m4v", ".mov", ".ts", ".m2ts"}
-GOOD_AUDIO = {"aac", "ac3", "eac3", "mp3", "pcm_s16le", "pcm_s24le", "flac", "opus", "vorbis"}
-# Common audio that the PS5 player typically cannot decode (video plays silent or fails).
-BAD_AUDIO = {"dts", "truehd", "mlp"}
-# ffprobe "level" is level*30 for HEVC (150 = 5.0), level*10 for H.264 (42 = 4.2).
-H264_MAX_LEVEL = 42
+TARGETS = ("plex", "media-gallery")
+# ffprobe "level" is level*10 for H.264 (52 = 5.2) and level*30 for HEVC (153 = 5.1).
+H264_MAX_LEVEL = 52
 HEVC_MAX_LEVEL = 153
+# Codecs the PS5 cannot decode, so Plex must transcode the video on the server.
+SERVER_TRANSCODE = {"av1", "vp9", "vc1", "mpeg2video", "mpeg4", "msmpeg4v3", "wmv3", "mpeg1video"}
+IMAGE_SUBS = {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"}
+# Sony's Media Gallery list (playstation.com support: play video from USB on PS5).
+GALLERY = {
+    ".mkv": ("h264", 42, {"aac"}),
+    ".mp4": ("h264", 52, {"aac"}),
+    ".m4v": ("h264", 52, {"aac"}),
+    ".webm": ("vp9", None, {"opus"}),
+}
 FAIL, WARN, OK = "FAIL", "WARN", "OK"
 ORDER = {FAIL: 0, WARN: 1, OK: 2}
 
 
-def evaluate(probe, ext):
-    """Return a list of (severity, message) for one ffprobe JSON result."""
+def _streams(probe, kind):
+    return [s for s in probe.get("streams") or [] if s.get("codec_type") == kind
+            and not (s.get("disposition") or {}).get("attached_pic")]
+
+
+def _video_issues(v):
+    """Decode-level problems that break the PS5 regardless of target."""
     issues = []
-    streams = probe.get("streams") or []
-    video = [s for s in streams if s.get("codec_type") == "video"
-             and not (s.get("disposition") or {}).get("attached_pic")]
-    audio = [s for s in streams if s.get("codec_type") == "audio"]
-
-    if ext not in GOOD_CONTAINERS:
-        issues.append((WARN, "container %s is poorly supported" % ext))
-    if not video:
-        return issues + [(FAIL, "no video stream")]
-
-    v = video[0]
-    codec = v.get("codec_name", "?")
-    profile = v.get("profile", "")
-    pix = v.get("pix_fmt", "")
-    level = v.get("level") or 0
-    ten_bit = "10" in pix or "12" in pix
-
-    # Dolby Vision RPU in side data (needs ffprobe >= 4.4 to be visible).
-    dv_profile = None
+    codec, profile = v.get("codec_name", "?"), v.get("profile", "")
+    pix, level = v.get("pix_fmt", ""), v.get("level") or 0
     for sd in v.get("side_data_list") or []:
         if "DOVI" in str(sd.get("side_data_type", "")):
-            dv_profile = sd.get("dv_profile")
-            compat = sd.get("dv_bl_signal_compatibility_id")
-            if dv_profile == 5 or compat == 0:
+            prof, compat = sd.get("dv_profile"), sd.get("dv_bl_signal_compatibility_id")
+            if prof == 5 or compat == 0:
                 issues.append((FAIL, "Dolby Vision profile %s with no HDR10/SDR fallback "
-                                     "(pink/purple picture)" % dv_profile))
-            elif compat not in (1, 2):  # 1 = HDR10 fallback, 2 = SDR fallback: plays as base layer
-                issues.append((WARN, "Dolby Vision profile %s (compat %s); "
-                                     "verify playback" % (dv_profile, compat)))
-
+                                     "(pink/purple picture)" % prof))
+            elif prof == 7:
+                issues.append((WARN, "Dolby Vision profile 7 dual-layer; base layer is HDR10, "
+                                     "verify playback"))
+            elif compat not in (1, 2, 4, 6):
+                issues.append((WARN, "Dolby Vision profile %s (compat %s); verify playback"
+                               % (prof, compat)))
     if codec == "h264":
-        if ten_bit or "10" in profile:
-            issues.append((FAIL, "H.264 10-bit (Hi10P) is unsupported (pink/green screen)"))
+        if "10" in pix or "12" in pix or "10" in profile:
+            issues.append((FAIL, "H.264 10-bit (Hi10P): no hardware decode (pink/green screen)"))
         elif "444" in pix or "422" in pix:
-            issues.append((FAIL, "H.264 %s chroma is unsupported" % pix))
+            issues.append((FAIL, "H.264 %s chroma: no hardware decode" % pix))
         elif level > H264_MAX_LEVEL:
-            issues.append((WARN, "H.264 level %.1f exceeds 4.2" % (level / 10.0)))
+            issues.append((WARN, "H.264 level %.1f above 5.2" % (level / 10.0)))
     elif codec == "hevc":
         if profile and profile not in ("Main", "Main 10"):
-            issues.append((FAIL, "HEVC profile '%s' unsupported (Main/Main 10 only)" % profile))
+            issues.append((FAIL, "HEVC profile '%s' (Main/Main 10 only)" % profile))
         elif "444" in pix or "422" in pix or "12" in pix:
-            issues.append((FAIL, "HEVC %s unsupported" % pix))
+            issues.append((FAIL, "HEVC %s (4:2:0 8/10-bit only)" % pix))
         elif level > HEVC_MAX_LEVEL:
-            issues.append((WARN, "HEVC level %.1f exceeds 5.1" % (level / 30.0)))
-    elif codec in ("av1", "vp9"):
-        issues.append((WARN, "%s decode is not supported by the PS5 media player" % codec))
-    elif codec in ("mpeg2video", "mpeg4", "msmpeg4v3"):
-        pass  # legacy codecs: plain playback usually works; container check above covers .avi
-    else:
-        issues.append((FAIL, "video codec '%s' unsupported" % codec))
-
+            issues.append((WARN, "HEVC level %.1f above 5.1" % (level / 30.0)))
     w, h = v.get("width") or 0, v.get("height") or 0
-    if w > 4096 or h > 2304:
-        issues.append((WARN, "resolution %dx%d above 4K" % (w, h)))
-
-    if audio:
-        names = {a.get("codec_name") for a in audio}
-        if not names & GOOD_AUDIO:
-            bad = sorted(n for n in names if n)
-            issues.append((WARN, "no PS5-playable audio track (%s)" % ", ".join(bad)))
-        elif names & BAD_AUDIO and len(names & GOOD_AUDIO) == 0:
-            issues.append((WARN, "only unsupported audio"))
-    else:
-        issues.append((WARN, "no audio stream"))
+    if w > 3840 or h > 2160:
+        issues.append((WARN, "resolution %dx%d above 3840x2160" % (w, h)))
     return issues
+
+
+def evaluate(probe, ext, target="plex"):
+    """Return a list of (severity, message) for one ffprobe JSON result."""
+    video, audio = _streams(probe, "video"), _streams(probe, "audio")
+    subs = _streams(probe, "subtitle")
+    if not video:
+        return [(FAIL, "no video stream")]
+    v = video[0]
+    codec = v.get("codec_name", "?")
+    issues = _video_issues(v)
+
+    if target == "plex":
+        if codec in SERVER_TRANSCODE:
+            issues.append((WARN, "%s is not decoded by the PS5; the server must transcode "
+                                 "the video" % codec))
+        elif codec not in ("h264", "hevc"):
+            issues.append((FAIL, "video codec '%s' unsupported" % codec))
+        if not audio:
+            issues.append((WARN, "no audio stream"))
+        # Plex burns image subtitles into the video (full video transcode). Forced tracks are
+        # turned on automatically, so only those are flagged; optional ones are opt-in.
+        for s in subs:
+            d = s.get("disposition") or {}
+            if s.get("codec_name") in IMAGE_SUBS and d.get("forced"):
+                issues.append((WARN, "forced %s subtitle forces a video transcode"
+                               % s.get("codec_name")))
+                break
+    else:  # media-gallery: only what Sony lists
+        rule = GALLERY.get(ext)
+        if rule is None:
+            issues.append((FAIL, "container %s not supported by Media Gallery" % ext))
+        else:
+            want, max_level, ok_audio = rule
+            if codec != want:
+                issues.append((FAIL, "Media Gallery plays %s in %s, not %s" % (want, ext, codec)))
+            elif max_level and (v.get("level") or 0) > max_level:
+                issues.append((FAIL, "H.264 level %.1f above %.1f for %s"
+                               % ((v.get("level") or 0) / 10.0, max_level / 10.0, ext)))
+            names = {a.get("codec_name") for a in audio}
+            if not audio:
+                issues.append((WARN, "no audio stream"))
+            elif not names & ok_audio:
+                issues.append((WARN, "no %s audio track (%s); plays silent"
+                               % ("/".join(sorted(ok_audio)), ", ".join(sorted(n for n in names if n)))))
+    # de-duplicate while keeping order
+    seen, out = set(), []
+    for i in issues:
+        if i not in seen:
+            seen.add(i)
+            out.append(i)
+    return out
 
 
 def run_probe(cmd, path, timeout):
@@ -129,16 +164,16 @@ def walk(root):
                 yield os.path.join(dirpath, f)
 
 
-def check_file(path, cmd, timeout, cache):
+def check_file(path, cmd, timeout, cache, target="plex"):
     st = os.stat(path)
-    key = "%s|%d|%d" % (path, st.st_size, int(st.st_mtime))
+    key = "%s|%s|%d|%d" % (target, path, st.st_size, int(st.st_mtime))
     if key in cache:
         return cache[key], key
     probe, err = run_probe(cmd, path, timeout)
     if err:
         res = {"path": path, "severity": FAIL, "issues": ["unreadable: " + err], "info": ""}
     else:
-        issues = evaluate(probe, os.path.splitext(path)[1].lower())
+        issues = evaluate(probe, os.path.splitext(path)[1].lower(), target)
         sev = min((s for s, _ in issues), key=lambda x: ORDER[x], default=OK)
         res = {"path": path, "severity": sev, "issues": [m for _, m in issues],
                "info": summarize(probe)}
@@ -148,6 +183,9 @@ def check_file(path, cmd, timeout, cache):
 def main(argv=None):
     p = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     p.add_argument("root", help="directory to scan")
+    p.add_argument("--target", choices=TARGETS, default="plex",
+                   help="playback path: plex (Plex for PS5 app, default) or media-gallery (USB)")
+    p.add_argument("--strict", action="store_true", help="treat WARN as FAIL for the exit code")
     p.add_argument("--ffprobe", default="ffprobe",
                    help="ffprobe command; may be a wrapper script or quoted command (default: ffprobe)")
     p.add_argument("--jobs", type=int, default=2, help="parallel probes (default 2)")
@@ -167,7 +205,7 @@ def main(argv=None):
     paths = sorted(walk(args.root))
     results, new_cache = [], {}
     with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
-        for i, (res, key) in enumerate(ex.map(lambda x: check_file(x, cmd, args.timeout, cache), paths), 1):
+        for i, (res, key) in enumerate(ex.map(lambda x: check_file(x, cmd, args.timeout, cache, args.target), paths), 1):
             results.append(res)
             new_cache[key] = res
             if sys.stderr.isatty():
@@ -198,7 +236,8 @@ def main(argv=None):
         nf = sum(r["severity"] == FAIL for r in results)
         nw = sum(r["severity"] == WARN for r in results)
         print("\n%d files scanned: %d FAIL, %d WARN, %d OK" % (len(results), nf, nw, len(results) - nf - nw))
-    return 1 if any(r["severity"] == FAIL for r in results) else 0
+    worst = {FAIL} | ({WARN} if args.strict else set())
+    return 1 if any(r["severity"] in worst for r in results) else 0
 
 
 if __name__ == "__main__":
