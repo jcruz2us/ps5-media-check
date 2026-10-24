@@ -10,7 +10,9 @@
 
 Config: RADARR_URL and RADARR_API_KEY from the environment or --env-file (KEY=VALUE lines).
 If the movie is already in Radarr, it is switched to the profile, monitored, and searched
-if it has no file. Exit codes: 0 added/updated, 2 ambiguous or not found, 3 wait timed out, 1 error;
+if it has no file. If Radarr's search grabs nothing within --fallback-wait seconds, the best
+release that was rejected only for soft reasons (size limits, LQ/Upscaled, SD quality) is
+grabbed; anything that breaks PS5 playback or English-first audio is never a fallback. Exit codes: 0 added/updated, 2 ambiguous or not found, 3 wait timed out, 1 error;
 with --on-import, the hook's exit code.
 Stdlib only, Python 3.8+.
 """
@@ -43,16 +45,21 @@ class Radarr:
         self.base = url.rstrip("/") + "/api/v3"
         self.key = key
 
-    def call(self, path, method="GET", body=None) -> Any:
+    def call(self, path, method="GET", body=None, timeout=60, retries=1) -> Any:
         data = json.dumps(body).encode() if body is not None else None
-        req = urllib.request.Request(self.base + path, data=data, method=method, headers={
-            "X-Api-Key": self.key, "Content-Type": "application/json"})
-        try:
-            raw = urllib.request.urlopen(req, timeout=60).read()
-        except urllib.error.HTTPError as e:
-            raise SystemExit("Radarr %s %s -> HTTP %s: %s" % (
-                method, path, e.code, e.read().decode("utf-8", "replace")[:300]))
-        return json.loads(raw) if raw else None
+        for attempt in range(retries + 1):
+            req = urllib.request.Request(self.base + path, data=data, method=method, headers={
+                "X-Api-Key": self.key, "Content-Type": "application/json"})
+            try:
+                raw = urllib.request.urlopen(req, timeout=timeout).read()
+                return json.loads(raw) if raw else None
+            except urllib.error.HTTPError as e:
+                # 5xx from a reverse proxy (slow indexer search) is worth one more try
+                if e.code >= 500 and attempt < retries:
+                    time.sleep(5)
+                    continue
+                raise SystemExit("Radarr %s %s -> HTTP %s: %s" % (
+                    method, path, e.code, e.read().decode("utf-8", "replace")[:300]))
 
 
 def norm(s):
@@ -88,6 +95,115 @@ def is_confident(ranked, title, year):
     return exact and len(same) == 1
 
 
+# --- fallback: grab the best release the profile rejected only for "soft" reasons ----------
+
+# Custom formats that mark a release as lower quality but still playable on the PS5.
+SOFT_FORMATS = {"LQ", "LQ (Release Title)", "Upscaled"}
+# Qualities outside a typical profile that are still fine as a last resort: SD sources and TV
+# captures. Remux, BR-DISK, Raw-HD and pre-release sources (CAM, TELESYNC...) are never used.
+FALLBACK_QUALITIES = {"DVD", "DVD-R", "SDTV", "WEBDL-480p", "WEBRip-480p", "Bluray-480p",
+                      "Bluray-576p", "HDTV-720p", "HDTV-1080p", "HDTV-2160p"}
+MAX_FALLBACK_BYTES = 40 * 1024 ** 3
+SOFT_REJECTION = re.compile(
+    r"is (smaller|larger) than (minimum|maximum) allowed|not wanted in profile|"
+    r"Custom Formats .* below|below Movie's profile minimum", re.I)
+
+
+def fallback_candidates(releases, format_scores, hard_score=-10000):
+    """Releases Radarr rejected only for soft reasons, best first.
+
+    Hard (never grabbed): any custom format scored <= hard_score that is not in SOFT_FORMATS
+    (Hi10P, DV without fallback, MULTi, not English, ...), qualities outside the profile's
+    allowance and FALLBACK_QUALITIES (CAM, TELESYNC, Remux...), files over 40 GB, unknown movie, blocklisted, already queued,
+    torrents with no seeders. Soft: size limits, LQ/Upscaled formats, an SD quality.
+    """
+    out = []
+    for r in releases:
+        if not r.get("rejected"):
+            continue
+        cfs = {c.get("name") for c in r.get("customFormats") or []}
+        hard_cfs = {c for c in cfs if format_scores.get(c, 0) <= hard_score and c not in SOFT_FORMATS}
+        if hard_cfs:
+            continue
+        if any(not SOFT_REJECTION.search(x) for x in r.get("rejections") or []):
+            continue
+        q = ((r.get("quality") or {}).get("quality") or {})
+        rej = " ".join(r.get("rejections") or [])
+        if "not wanted in profile" in rej and q.get("name") not in FALLBACK_QUALITIES:
+            continue
+        if q.get("modifier") in ("Remux", "Brdisk", "Rawhd") or "remux" in (q.get("name") or "").lower():
+            continue
+        if (r.get("size") or 0) > MAX_FALLBACK_BYTES:
+            continue
+        if r.get("protocol") == "torrent" and not r.get("seeders"):
+            continue
+        out.append(r)
+
+    def key(r):
+        q = r["quality"]["quality"]
+        cfs = {c.get("name") for c in r.get("customFormats") or []}
+        res = q.get("resolution") or 0
+        # HD beats SD; within HD a clean release beats a low-quality one before 4K beats 1080p.
+        return ("Upscaled" in cfs, -min(res, 1080), bool(cfs & SOFT_FORMATS), -res,
+                -(r.get("seeders") or 0))
+    return sorted(out, key=key)
+
+
+def why_soft(r):
+    reasons = [x for x in r.get("rejections") or []]
+    return "; ".join(x[:70] for x in reasons) or "rejected"
+
+
+def grabbed_since(radarr, movie_id, since):
+    for h in radarr.call("/history/movie?movieId=%d" % movie_id) or []:
+        if h.get("eventType") == "grabbed" and h.get("date", "") >= since:
+            return h
+    return None
+
+
+def fallback(radarr, movie_id, pid, a):
+    """Wait for Radarr's own search; if it grabbed nothing, take the best soft-rejected release."""
+    since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 5))
+    deadline = time.time() + a.fallback_wait
+    while time.time() < deadline:
+        time.sleep(min(15, max(1, deadline - time.time())))
+        h = grabbed_since(radarr, movie_id, since)
+        if h:
+            print("Grabbed: %s" % h.get("sourceTitle"), flush=True)
+            return
+    profile = radarr.call("/qualityprofile/%d" % pid)
+    scores = {f["name"]: f["score"] for f in profile.get("formatItems", [])}
+    releases = radarr.call("/release?movieId=%d" % movie_id, timeout=300) or []
+    if grabbed_since(radarr, movie_id, since):
+        print("Grabbed by Radarr", flush=True)
+        return
+    # Interactive search can see releases the automatic search missed; Radarr returns them in
+    # its own preference order, so the first accepted one is what Radarr would pick.
+    accepted = [r for r in releases if not r.get("rejected") and r.get("downloadAllowed", True)]
+    for r in accepted[:3]:
+        if try_grab(radarr, r, "matches %s" % a.profile):
+            return
+    cands = fallback_candidates(releases, scores)
+    for r in cands[:3]:
+        if try_grab(radarr, r, "fallback outside %s: %s" % (a.profile, why_soft(r))):
+            return
+    print("No PS5-safe release could be grabbed (%d checked); Radarr keeps watching for new ones"
+          % len(releases), flush=True)
+
+
+def try_grab(radarr, r, why):
+    """Push one search result to the download client; False if the indexer link is dead."""
+    print("Grabbing %s [%s, %s seeders] (%s)" % (r["title"], r["quality"]["quality"]["name"],
+                                                 r.get("seeders"), why), flush=True)
+    try:
+        radarr.call("/release", "POST", {"guid": r["guid"], "indexerId": r["indexerId"]},
+                    timeout=120, retries=0)
+        return True
+    except SystemExit as e:
+        print("  failed: %s" % str(e).splitlines()[0][:150], flush=True)
+        return False
+
+
 def describe(r):
     return "%s (%s)  tmdb:%s%s" % (r.get("title"), r.get("year"), r.get("tmdbId"),
                                    "  [in library]" if r.get("id") else "")
@@ -106,6 +222,10 @@ def main(argv=None):
                    help="block until Radarr has imported a file for the movie")
     p.add_argument("--wait-hours", type=float, default=48, help="give up waiting after this (default 48)")
     p.add_argument("--poll", type=int, default=300, help="seconds between checks while waiting")
+    p.add_argument("--no-fallback", action="store_true",
+                   help="never grab a release outside the profile")
+    p.add_argument("--fallback-wait", type=int, default=90,
+                   help="seconds to let Radarr's own search grab before falling back (default 90)")
     p.add_argument("--on-import", metavar="CMD",
                    help="shell command run once the movie has a file (implies --wait); gets "
                         "MOVIE_TITLE, MOVIE_YEAR, MOVIE_PATH, MOVIE_FOLDER, MOVIE_FILE in its env")
@@ -158,6 +278,8 @@ def main(argv=None):
             radarr.call("/movie/%d" % movie["id"], "PUT", current)
         if search:
             radarr.call("/command", "POST", {"name": "MoviesSearch", "movieIds": [movie["id"]]})
+            if not a.no_fallback:
+                fallback(radarr, movie["id"], pid, a)
         return after(radarr, movie["id"], a)
 
     roots = radarr.call("/rootfolder")
@@ -173,7 +295,9 @@ def main(argv=None):
     if a.dry_run:
         return 0
     added = radarr.call("/movie", "POST", body)
-    print("Added: id %s, path %s" % (added.get("id"), added.get("path")))
+    print("Added: id %s, path %s" % (added.get("id"), added.get("path")), flush=True)
+    if not a.no_search and not a.no_fallback:
+        fallback(radarr, added["id"], pid, a)
     return after(radarr, added["id"], a)
 
 

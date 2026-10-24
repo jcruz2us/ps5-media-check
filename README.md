@@ -127,6 +127,16 @@ python3 arr/add_movie.py "Heat" --dry-run
 - If the title is ambiguous, it lists the candidates and exits with code 2.
 - If the movie is already in Radarr, it switches it to the profile and searches if there is no
   file yet.
+- **Fallbacks.** If Radarr's search grabs nothing within `--fallback-wait` seconds (default 90),
+  the script runs an interactive search and grabs, in order:
+  1. the first release Radarr accepts (interactive search sees releases the automatic one can miss);
+  2. otherwise the best release rejected only for soft reasons: size limits, `LQ` / `Upscaled`
+     formats, or an SD/HDTV quality the profile leaves out. HD beats SD, a clean release beats a
+     low-quality one, then higher resolution and more seeders win; upscales come last.
+
+  Never used as a fallback: any other -10000 format (Hi10P, DV without fallback, AV1, MULTi,
+  not English...), Remux/BR-DISK/CAM, files over 40 GB, dead torrents, blocklisted or unmatched
+  releases. If a grab fails (dead indexer link) it tries the next one. `--no-fallback` turns this off.
 - `--wait` blocks until Radarr imports a file; `--on-import CMD` then runs a hook (e.g. copy the
   folder to another machine) with `MOVIE_TITLE`, `MOVIE_YEAR`, `MOVIE_PATH`, `MOVIE_FOLDER` and
   `MOVIE_FILE` set. Run it under `nohup` or a scheduler for long downloads.
