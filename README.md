@@ -122,6 +122,9 @@ python3 arr/add_movie.py "Heat" --dry-run
 - If the title is ambiguous, it lists the candidates and exits with code 2.
 - If the movie is already in Radarr, it switches it to the profile and searches if there is no
   file yet.
+- `--wait` blocks until Radarr imports a file; `--on-import CMD` then runs a hook (e.g. copy the
+  folder to another machine) with `MOVIE_TITLE`, `MOVIE_YEAR`, `MOVIE_PATH`, `MOVIE_FOLDER` and
+  `MOVIE_FILE` set. Run it under `nohup` or a scheduler for long downloads.
 
 ## Tests
 

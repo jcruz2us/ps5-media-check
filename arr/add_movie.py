@@ -5,17 +5,22 @@
     add_movie.py "Dune (2021)"           # a year in parentheses pins the match
     add_movie.py "Dune" --pick 2         # choose from the printed candidates
     add_movie.py "Dune" --dry-run        # show what would happen
+    add_movie.py "Heat (1995)" --wait --on-import ./copy.sh
+                                         # block until Radarr imports a file, then run a hook
 
 Config: RADARR_URL and RADARR_API_KEY from the environment or --env-file (KEY=VALUE lines).
 If the movie is already in Radarr, it is switched to the profile, monitored, and searched
-if it has no file. Exit codes: 0 added/updated, 2 ambiguous or not found, 1 error.
+if it has no file. Exit codes: 0 added/updated, 2 ambiguous or not found, 3 wait timed out, 1 error;
+with --on-import, the hook's exit code.
 Stdlib only, Python 3.8+.
 """
 import argparse
 import json
 import os
 import re
+import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -97,6 +102,13 @@ def main(argv=None):
     p.add_argument("--no-search", action="store_true", help="add without searching")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--env-file", help="file with RADARR_URL / RADARR_API_KEY lines")
+    p.add_argument("--wait", action="store_true",
+                   help="block until Radarr has imported a file for the movie")
+    p.add_argument("--wait-hours", type=float, default=48, help="give up waiting after this (default 48)")
+    p.add_argument("--poll", type=int, default=300, help="seconds between checks while waiting")
+    p.add_argument("--on-import", metavar="CMD",
+                   help="shell command run once the movie has a file (implies --wait); gets "
+                        "MOVIE_TITLE, MOVIE_YEAR, MOVIE_PATH, MOVIE_FOLDER, MOVIE_FILE in its env")
     a = p.parse_args(argv)
 
     if a.env_file:
@@ -146,7 +158,7 @@ def main(argv=None):
             radarr.call("/movie/%d" % movie["id"], "PUT", current)
         if search:
             radarr.call("/command", "POST", {"name": "MoviesSearch", "movieIds": [movie["id"]]})
-        return 0
+        return after(radarr, movie["id"], a)
 
     roots = radarr.call("/rootfolder")
     root = a.root or (roots[0]["path"] if roots else None)
@@ -162,7 +174,32 @@ def main(argv=None):
         return 0
     added = radarr.call("/movie", "POST", body)
     print("Added: id %s, path %s" % (added.get("id"), added.get("path")))
-    return 0
+    return after(radarr, added["id"], a)
+
+
+def after(radarr, movie_id, a):
+    """Optionally wait for the import and run the --on-import hook."""
+    if not (a.wait or a.on_import):
+        return 0
+    deadline = time.time() + a.wait_hours * 3600
+    while True:
+        m = radarr.call("/movie/%d" % movie_id)
+        if m.get("hasFile"):
+            break
+        if time.time() >= deadline:
+            print("Gave up: no file imported for %s after %.0f h" % (m.get("title"), a.wait_hours))
+            return 3
+        time.sleep(a.poll)
+    mf = m.get("movieFile") or {}
+    print("Imported: %s" % (mf.get("relativePath") or m.get("path")), flush=True)
+    if not a.on_import:
+        return 0
+    env = dict(os.environ, MOVIE_TITLE=str(m.get("title")), MOVIE_YEAR=str(m.get("year")),
+               MOVIE_PATH=m.get("path", ""), MOVIE_FOLDER=os.path.basename(m.get("path", "").rstrip("/")),
+               MOVIE_FILE=mf.get("relativePath", ""))
+    rc = subprocess.call(a.on_import, shell=True, env=env)
+    print("on-import exited %d" % rc)
+    return rc
 
 
 if __name__ == "__main__":
